@@ -15,82 +15,139 @@ import (
 	"github.com/adrium/goheif"
 )
 
+const logFileName = "logs.txt"
+
 func main() {
 	fmt.Println("Starting the program...")
-	run()
-	fmt.Println("Program completed!")
-}
 
-func run() {
-	fmt.Println("Fetching the current directory...")
-	currentDir, err := os.Getwd()
+	currentDir, err := getCurrentDirectory()
 	if err != nil {
 		log.Fatalf("Failed to get current directory: %v", err)
 	}
 
-	files, err := os.ReadDir(currentDir)
+	jpegDir := ensureJPEGDirectoryExists(currentDir)
+	files, err := getFilesInDirectory(currentDir)
 	if err != nil {
 		log.Fatalf("Failed to read directory: %v", err)
 	}
 
-	startTime := time.Now()
-	logs := make(map[string]string)
-	jpegDir := filepath.Join(currentDir, "jpegs")
+	logs := processFiles(currentDir, jpegDir, files)
+	saveLogsToFile(jpegDir, logs)
 
-	// Ensure the /jpegs directory exists
+	fmt.Println("Program completed!")
+}
+
+func getCurrentDirectory() (string, error) {
+	fmt.Println("Fetching the current directory...")
+	return os.Getwd()
+}
+
+func ensureJPEGDirectoryExists(dir string) string {
+	jpegDir := filepath.Join(dir, "jpegs")
 	if err := os.MkdirAll(jpegDir, 0755); err != nil {
 		log.Fatalf("Failed to create directory: %v", err)
 	}
+	return jpegDir
+}
 
-	fmt.Println("Processing files...")
+func getFilesInDirectory(dir string) ([]os.DirEntry, error) {
+	return os.ReadDir(dir)
+}
 
-	// Use buffered channels
-	fileChan := make(chan os.DirEntry, len(files))
-	logChan := make(chan map[string]string, len(files))
-
-	var wg sync.WaitGroup
-
-	// Set workerCount based on CPU cores
-	workerCount := runtime.NumCPU()
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for file := range fileChan {
-				fileLog := make(map[string]string)
-				ext := strings.ToLower(filepath.Ext(file.Name()))
-				if ext == ".heic" {
-					fmt.Printf("Processing file: %s\n", file.Name())
-					if err := convertFile(currentDir, file.Name(), jpegDir); err != nil {
-						fileLog[file.Name()] = fmt.Sprintf("error details: %s", err)
-					} else {
-						fileLog[file.Name()] = "converted successfully"
-					}
-				}
-				logChan <- fileLog
-			}
-		}()
+func saveLogsToFile(jpegDir string, logs map[string][]string) {
+	logFilePath := filepath.Join(jpegDir, logFileName)
+	logFile, err := os.Create(logFilePath)
+	if err != nil {
+		log.Fatalf("Failed to create log file: %v", err)
 	}
+	defer logFile.Close()
+
+	fmt.Println("Saving logs to logs.txt...")
+
+	for key, logMessages := range logs {
+		if key == "general" {
+			continue
+		}
+		for _, logMessage := range logMessages {
+			fmt.Fprintln(logFile, logMessage)
+		}
+	}
+
+	// Now write the general logs at the end of the file.
+	if generalLogs, ok := logs["general"]; ok {
+		for _, logMessage := range generalLogs {
+			fmt.Fprintln(logFile, logMessage)
+		}
+	}
+}
+
+func processFiles(currentDir, jpegDir string, files []os.DirEntry) map[string][]string {
+	fmt.Println("Processing files...")
+	startTime := time.Now()
+
+	logs := make(map[string][]string)
+	fileChan, logChan := setupWorkers(currentDir, jpegDir, len(files))
 
 	for _, file := range files {
 		fileChan <- file
 	}
 	close(fileChan)
 
+	aggregateLogs(logChan, logs, currentDir, jpegDir, startTime)
+
+	return logs
+}
+
+func setupWorkers(currentDir, jpegDir string, filesCount int) (chan os.DirEntry, chan map[string]string) {
+	fileChan := make(chan os.DirEntry, filesCount)
+	logChan := make(chan map[string]string, filesCount)
+
+	var wg sync.WaitGroup
+	workerCount := runtime.NumCPU()
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go worker(fileChan, logChan, currentDir, jpegDir, &wg)
+	}
+
 	go func() {
 		wg.Wait()
 		close(logChan)
 	}()
 
-	var totalHEICSize int64
-	var totalJPEGSize int64
+	return fileChan, logChan
+}
 
+func worker(fileChan chan os.DirEntry, logChan chan map[string]string, currentDir, jpegDir string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for file := range fileChan {
+		logChan <- processFile(file, currentDir, jpegDir)
+	}
+}
+
+func processFile(file os.DirEntry, currentDir, jpegDir string) map[string]string {
+	logEntry := make(map[string]string)
+	ext := strings.ToLower(filepath.Ext(file.Name()))
+
+	if ext == ".heic" {
+		fmt.Printf("Processing file: %s\n", file.Name())
+		err := convertFile(currentDir, file.Name(), jpegDir)
+		if err != nil {
+			logEntry[file.Name()] = fmt.Sprintf("error details: %s", err)
+		} else {
+			logEntry[file.Name()] = "converted successfully"
+		}
+	}
+
+	return logEntry
+}
+func aggregateLogs(logChan chan map[string]string, logs map[string][]string, currentDir, jpegDir string, startTime time.Time) {
+	var totalHEICSize, totalJPEGSize int64
+	generalLogs := []string{} // Storing general logs here
 	for logItem := range logChan {
 		for k := range logItem {
 			heicFilePath := filepath.Join(currentDir, k)
-			jpgFilePath := filepath.Join(jpegDir, strings.TrimSuffix(k, filepath.Ext(k))+".jpg")
+			jpgFilePath := getJPEGFilePath(jpegDir, k)
 
-			// Fetch sizes
 			heicSizeBytes := getFileSize(heicFilePath)
 			jpgSizeBytes := getFileSize(jpgFilePath)
 
@@ -100,39 +157,25 @@ func run() {
 			heicSize := humanReadableFileSize(heicSizeBytes)
 			jpgSize := humanReadableFileSize(jpgSizeBytes)
 
-			logs[k] = fmt.Sprintf("%s %s > Converted > jpegs/%s.jpg %s", k, heicSize, strings.TrimSuffix(k, filepath.Ext(k)), jpgSize)
+			logs[k] = append(logs[k], fmt.Sprintf("%s %s > Converted > jpegs/%s.jpg %s", k, heicSize, strings.TrimSuffix(k, filepath.Ext(k)), jpgSize))
 		}
 	}
 
-	// Compute total duration and average duration per file
+	// Add general logs to the generalLogs slice
 	totalDuration := time.Since(startTime)
-	totalLogLines := float64(len(logs))
-	totalMilliseconds := int(totalDuration.Milliseconds())
-	seconds := totalMilliseconds / 1000
-	milliseconds := totalMilliseconds % 1000
+	totalLogLines := len(logs)
+	generalLogs = append(generalLogs, fmt.Sprintf("\n%v Files", totalLogLines))
+	generalLogs = append(generalLogs, fmt.Sprintf("Total Time Taken==%v", totalDuration))
+	generalLogs = append(generalLogs, fmt.Sprintf("Average Time Per File==%v", totalDuration/time.Duration(totalLogLines)))
+	generalLogs = append(generalLogs, fmt.Sprintf("Total HEIC File Size==%s", humanReadableFileSize(totalHEICSize)))
+	generalLogs = append(generalLogs, fmt.Sprintf("Total JPEG Folder Size==%s", humanReadableFileSize(totalJPEGSize)))
 
-	averageDurationPerFileSeconds := seconds / len(logs)
-	averageDurationPerFileMilliseconds := totalMilliseconds / len(logs) % 1000
+	// Add the generalLogs slice to the main logs map
+	logs["general"] = generalLogs
+}
 
-	// Save logs to logs.txt
-	logFilePath := filepath.Join(jpegDir, "logs.txt")
-	logFile, err := os.Create(logFilePath)
-	if err != nil {
-		log.Fatalf("Failed to create log file: %v", err)
-	}
-	defer logFile.Close()
-
-	fmt.Println("Saving logs to logs.txt...")
-	for file, logMessage := range logs {
-		fmt.Fprintf(logFile, "%s==%s\n", file, logMessage)
-	}
-	// Add total and average durations to the log file
-	fmt.Fprintf(logFile, "\n%v Files \nTotal time taken: %ds %dms\n", totalLogLines, seconds, milliseconds)
-	fmt.Fprintf(logFile, "Average time per file: %ds %dms\n", averageDurationPerFileSeconds, averageDurationPerFileMilliseconds)
-
-	fmt.Fprintf(logFile, "\nTotal HEIC files size: %s\n", humanReadableFileSize(totalHEICSize))
-	fmt.Fprintf(logFile, "Total JPEG folder size: %s\n", humanReadableFileSize(totalJPEGSize))
-
+func getJPEGFilePath(jpegDir, originalFileName string) string {
+	return filepath.Join(jpegDir, strings.TrimSuffix(originalFileName, filepath.Ext(originalFileName))+".jpg")
 }
 
 func getFileSize(path string) int64 {
