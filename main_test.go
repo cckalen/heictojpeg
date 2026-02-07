@@ -91,3 +91,61 @@ func TestProcessFiles(t *testing.T) {
 	}
 
 }
+
+func TestResolveInputDirectoryArg(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+
+	os.Args = []string{"heictojpeg", "testdata/images"}
+
+	dir, files, err := resolveInput()
+	if err != nil {
+		t.Fatalf("resolveInput failed: %v", err)
+	}
+	if dir != "testdata/images" {
+		t.Fatalf("expected dir testdata/images, got %s", dir)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected files from testdata/images, got none")
+	}
+}
+
+func TestResolveInputFileArg(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+
+	inputFile := "testdata/images/libheif-example.heic"
+	os.Args = []string{"heictojpeg", inputFile}
+
+	dir, files, err := resolveInput()
+	if err != nil {
+		t.Fatalf("resolveInput failed: %v", err)
+	}
+	if dir != filepath.Dir(inputFile) {
+		t.Fatalf("expected dir %s, got %s", filepath.Dir(inputFile), dir)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected one file entry, got %d", len(files))
+	}
+	if files[0].Name() != "libheif-example.heic" {
+		t.Fatalf("expected file libheif-example.heic, got %s", files[0].Name())
+	}
+}
+
+func TestOpenSourceFixturesPresent(t *testing.T) {
+	fixtures := []string{
+		"testdata/images/libheif-example.heic",
+		"testdata/images/libheif-example.avif",
+		"testdata/images/goheif-camel.heic",
+	}
+
+	for _, fixture := range fixtures {
+		info, err := os.Stat(fixture)
+		if err != nil {
+			t.Fatalf("fixture missing (%s): %v", fixture, err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("fixture is empty (%s)", fixture)
+		}
+	}
+}

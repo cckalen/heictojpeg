@@ -9,7 +9,7 @@ During a flight/travel, driven by the frustration of not finding an efficient fr
 ## Features
 
 - Converts `.heic` files to `.jpg` format.
-- Automatically detects `.heic` files in the current directory.
+- Automatically detects `.heic` files in a target directory (or a single file path).
 - Saves the converted `.jpg` files in a dedicated subfolder.
 - Extremely fast, utilizing multi-threading and concurrency.
 - Provides a log file with details of the conversion. 
@@ -17,9 +17,11 @@ During a flight/travel, driven by the frustration of not finding an efficient fr
 ## Usage
 
 1. Download the executable(.exe) in the repo.
-2. Place the executable in a directory containing `.heic` files.
-3. Run the executable.
-4. Check the `jpegs` subfolder for the converted `.jpg` images.
+2. Run the executable with an optional first argument:
+   - No argument: processes the current directory.
+   - Directory path: processes all `.heic` files in that directory.
+   - File path: processes that single `.heic` file.
+3. Check the `jpegs` subfolder in the target directory for the converted `.jpg` images.
 
 
 ## Sample Output

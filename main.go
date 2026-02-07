@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/jpeg"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -20,26 +21,40 @@ const logFileName = "logs.txt"
 func main() {
 	fmt.Println("Starting the program...")
 
-	currentDir, err := getCurrentDirectory()
+	currentDir, files, err := resolveInput()
 	if err != nil {
-		log.Fatalf("Failed to get current directory: %v", err)
+		log.Fatalf("Failed to resolve input path: %v", err)
 	}
 
 	jpegDir := ensureJPEGDirectoryExists(currentDir)
-	files, err := getFilesInDirectory(currentDir)
-	if err != nil {
-		log.Fatalf("Failed to read directory: %v", err)
-	}
-
 	logs := processFiles(currentDir, jpegDir, files)
 	saveLogsToFile(jpegDir, logs)
 
 	fmt.Println("Program completed!")
 }
 
-func getCurrentDirectory() (string, error) {
-	fmt.Println("Fetching the current directory...")
-	return os.Getwd()
+func resolveInput() (string, []os.DirEntry, error) {
+	inputPath := "."
+	if len(os.Args) > 1 {
+		inputPath = os.Args[1]
+	}
+
+	info, err := os.Stat(inputPath)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if info.IsDir() {
+		files, err := getFilesInDirectory(inputPath)
+		if err != nil {
+			return "", nil, err
+		}
+		return inputPath, files, nil
+	}
+
+	parentDir := filepath.Dir(inputPath)
+	entry := fs.FileInfoToDirEntry(info)
+	return parentDir, []os.DirEntry{entry}, nil
 }
 
 func ensureJPEGDirectoryExists(dir string) string {
